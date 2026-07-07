@@ -21,8 +21,10 @@ import {
 } from "@/lib/config";
 
 // H-07 fix: explicit per-call timeout so a slow LLM response cannot hang a
-// serverless request until the platform kills it.
-const UPSTREAM_TIMEOUT_MS = 30_000;
+// serverless request until the platform kills it. Set to 15s per call — with
+// 4 models in the fallback chain, worst-case total is 60s, matching the
+// Vercel function timeout exported below.
+const UPSTREAM_TIMEOUT_MS = 15_000;
 
 const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY ?? "";
 
@@ -150,6 +152,13 @@ async function callOpenRouter(
 }
 
 // ─── Main handler ────────────────────────────────────────────────────────────
+
+// Vercel function timeout. Hobby plan supports up to 60s; Pro supports up to
+// 300s. Without this export, Vercel applies the platform default (10s on
+// Hobby), which is too short for a 4-model fallback chain where each model
+// can take 5-30s to respond.
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   const requestId = randomUUID();
   const ip = getClientIp(req);
