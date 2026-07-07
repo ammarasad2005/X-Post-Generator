@@ -38,11 +38,10 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          # Build does not require a real key, but the route module emits a
-          # fatal log if the key is missing. Set a placeholder to suppress the
-          # warning during CI build (the route handler still validates at
-          # runtime — see lib/errors.ts and route.ts getGeminiClient).
-          GEMINI_API_KEY: ci-placeholder-not-a-real-key
+          # Build does not require a real key, but the route module checks
+          # configuration at request time (not build time). Pass a placeholder
+          # to suppress any future warnings.
+          OPENROUTER_API_KEY: ci-placeholder-not-a-real-key
 
       - name: Audit dependencies (non-blocking)
         run: npm audit --audit-level=moderate

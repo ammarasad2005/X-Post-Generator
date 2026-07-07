@@ -19,9 +19,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Build-time env: the route module logs a fatal warning if GEMINI_API_KEY is
-# missing, but the build still succeeds. Pass a placeholder to suppress noise.
-ENV GEMINI_API_KEY=build-placeholder
+# Build-time env: the route module only validates the OpenRouter key at request
+# time, not build time. Pass a placeholder to suppress any future warnings.
+ENV OPENROUTER_API_KEY=build-placeholder
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
