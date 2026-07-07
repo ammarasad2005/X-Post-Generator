@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { 
   Twitter, 
@@ -10,7 +10,6 @@ import {
   Info, 
   History, 
   Flame, 
-  TrendingUp, 
   Brain, 
   RefreshCw, 
   Plus, 
@@ -21,7 +20,11 @@ import {
   ThumbsDown,
   Globe,
   Search,
-  ExternalLink
+  ExternalLink,
+  MessageCircle,
+  Repeat2,
+  Heart,
+  BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -211,20 +214,50 @@ Numbers don't lie.`,
 ];
 
 export default function Home() {
-  // Saved/Drafts collection initialized lazily to avoid synchronous effect triggers
-  const [savedPosts, setSavedPosts] = useState<GeneratedPost[]>(() => {
-    if (typeof window !== "undefined") {
+  // M-02 fix: initialize savedPosts with [] on both server and client to avoid
+  // hydration mismatch. Use a useSyncExternalStore-style pattern: server
+  // snapshot is always [], client snapshot reads from localStorage on mount.
+  // The `mounted` flag is set via useState initializer that returns true only
+  // on client (guarded by typeof window check) — but to avoid hydration
+  // mismatch we still render the server version on first paint.
+  const [savedPosts, setSavedPosts] = useState<GeneratedPost[]>([]);
+  const [mounted, setMounted] = useState(false);
+
+  // useEffect is allowed to call setState here because we are syncing with an
+  // external system (localStorage). The react-hooks/set-state-in-effect rule
+  // is silenced via the line-level disable comment because this is the
+  // canonical Next.js client-storage hydration pattern.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+    try {
       const saved = window.localStorage.getItem("x_post_drafts");
       if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch (e) {
-          console.error("Failed to parse saved posts", e);
+        const parsed: unknown = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // H-03 fix: prune drafts older than 30 days on load (TTL).
+          const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+          const fresh = parsed.filter((p): p is GeneratedPost => {
+            if (!p || typeof p !== "object") return false;
+            const created = (p as GeneratedPost).createdAt;
+            if (!created) return true; // keep entries without createdAt
+            return new Date(created).getTime() >= thirtyDaysAgo;
+          });
+          setSavedPosts(fresh);
+          if (fresh.length !== parsed.length) {
+            // Persist the pruned list back to localStorage.
+            try {
+              window.localStorage.setItem("x_post_drafts", JSON.stringify(fresh));
+            } catch {
+              // ignore quota errors on prune write
+            }
+          }
         }
       }
+    } catch (e) {
+      console.error("Failed to parse saved posts", e);
     }
-    return [];
-  });
+  }, []);
 
   // Default Post Package loaded lazily on startup (Preloaded with Case Study 0)
   const [currentPost, setCurrentPost] = useState<GeneratedPost>(() => {
@@ -283,6 +316,25 @@ export default function Home() {
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
+  // M-09 fix: refs for interval + abort controller so they can be cleaned up
+  // when the component unmounts. Prevents the "setGeneratingStep on unmounted
+  // component" warning and the orphaned-interval memory leak.
+  const intervalRef = useRef<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
+  }, []);
+
   // Synchronous State updates for all editors to fully eliminate React's synchronous state update inside effects
   const syncEditorStates = (post: GeneratedPost) => {
     const card = post.suggestedStatsCard;
@@ -300,7 +352,7 @@ export default function Home() {
     setFootnote(card.provocativeLabel || "");
   };
 
-  const loadPostFromTemplate = (template: any) => {
+  const loadPostFromTemplate = (template: typeof CASE_STUDIES[number]) => {
     const mockPost: GeneratedPost = {
       id: "template-" + Date.now(),
       topic: template.topic,
@@ -345,12 +397,21 @@ export default function Home() {
       "GENERATING SUGGESTED COMPARISON DATA CARD..."
     ];
     let stepIndex = 0;
-    const interval = setInterval(() => {
+    // M-09 fix: track the interval in a ref so it can be cleared on unmount
+    // by the useEffect cleanup at the bottom of the component, preventing a
+    // memory leak if the user navigates away mid-request.
+    const interval = window.setInterval(() => {
       if (stepIndex < steps.length - 1) {
         stepIndex++;
         setGeneratingStep(steps[stepIndex]);
       }
     }, 1800);
+    intervalRef.current = interval;
+
+    // AbortController so the fetch can be cancelled if the component unmounts
+    // before the upstream LLM call returns.
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const res = await fetch("/api/generate", {
@@ -362,11 +423,21 @@ export default function Home() {
           strategy,
           tone,
           customContext
-        })
+        }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
-        throw new Error(`Server returned error status: ${res.status}`);
+        // Surface the typed error code from the server if available.
+        let detail = `Server returned error status: ${res.status}`;
+        try {
+          const errBody = await res.json();
+          if (errBody?.code) detail = `${errBody.code}: ${errBody.error}`;
+          if (errBody?.requestId) detail += ` (request ${errBody.requestId})`;
+        } catch {
+          // response had no JSON body
+        }
+        throw new Error(detail);
       }
 
       const data = await res.json();
@@ -393,19 +464,24 @@ export default function Home() {
       syncEditorStates(newPost);
       setActiveTab("preview");
 
-      // Generate random high-volume numbers to look viral!
-      const randomLikes = (Math.random() * 20 + 5).toFixed(1) + "K";
-      const randomRetweets = (Math.random() * 5 + 1).toFixed(1) + "K";
-      const randomViews = (Math.random() * 2 + 1).toFixed(1) + "M";
-      setLikesCount(randomLikes);
-      setRetweetsCount(randomRetweets);
-      setViewsCount(randomViews);
-
-    } catch (err: any) {
+      // L-03 fix: previously generated random fake engagement counts and
+      // presented them as real. Removed — the user can edit the count fields
+      // directly if they want to mockup a specific scenario, but we no longer
+      // auto-fill deceptive numbers.
+    } catch (err: unknown) {
+      // Ignore AbortError — fires when the component unmounts mid-request
+      // and we explicitly abort the fetch in the cleanup useEffect.
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
       console.error(err);
-      setErrorMsg(err.message || "Failed to generate post. Please check your connection or API key.");
+      const message = err instanceof Error ? err.message : "Failed to generate post. Please check your connection or API key.";
+      setErrorMsg(message);
     } finally {
-      clearInterval(interval);
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
       setIsGenerating(false);
     }
   };
@@ -436,7 +512,7 @@ export default function Home() {
     };
 
     const isAlreadySaved = savedPosts.some(p => p.id === updatedPost.id);
-    let newSavedList = [];
+    let newSavedList: GeneratedPost[] = [];
 
     if (isAlreadySaved) {
       newSavedList = savedPosts.map(p => p.id === updatedPost.id ? updatedPost : p);
@@ -444,15 +520,44 @@ export default function Home() {
       newSavedList = [updatedPost, ...savedPosts];
     }
 
+    // H-03 fix: cap drafts at 50 items (FIFO eviction) so localStorage cannot
+    // grow unbounded. Also wrap setItem in try/catch so QuotaExceededError
+    // does not crash the handler — show a user-visible error instead.
+    const MAX_DRAFTS = 50;
+    if (newSavedList.length > MAX_DRAFTS) {
+      newSavedList = newSavedList.slice(0, MAX_DRAFTS);
+    }
+
     setSavedPosts(newSavedList);
-    localStorage.setItem("x_post_drafts", JSON.stringify(newSavedList));
+    try {
+      localStorage.setItem("x_post_drafts", JSON.stringify(newSavedList));
+    } catch (e) {
+      console.error("Failed to persist drafts to localStorage", e);
+      setErrorMsg("Could not save draft — browser storage is full. Try deleting older drafts.");
+    }
   };
 
   const deleteSavedPost = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const updated = savedPosts.filter(p => p.id !== id);
     setSavedPosts(updated);
-    localStorage.setItem("x_post_drafts", JSON.stringify(updated));
+    try {
+      localStorage.setItem("x_post_drafts", JSON.stringify(updated));
+    } catch (e) {
+      console.error("Failed to persist drafts to localStorage", e);
+    }
+  };
+
+  // H-03 fix: explicit "clear all drafts" action so users can wipe sensitive
+  // AI-generated content from their device on demand.
+  const clearAllDrafts = () => {
+    if (!confirm("Delete ALL saved drafts? This cannot be undone.")) return;
+    setSavedPosts([]);
+    try {
+      localStorage.removeItem("x_post_drafts");
+    } catch (e) {
+      console.error("Failed to clear drafts", e);
+    }
   };
 
   const copyToClipboard = (text: string, type: "text" | "prompt" | "hash", hashVal?: string) => {
@@ -503,17 +608,20 @@ export default function Home() {
           <h1 className="text-lg font-black tracking-tight text-white/90 underline decoration-blue-500 decoration-4 underline-offset-4 font-display">
             POST GENERATOR
           </h1>
-          <span className="text-[10px] hidden sm:inline-block bg-white/5 text-slate-400 px-2 py-0.5 rounded border border-white/10 font-mono">
-            v1.2 PREMIUM
-          </span>
+          {/* L-05 fix: previously showed a hardcoded "v1.2 PREMIUM" badge.
+              Removed — there is no versioning scheme and no premium tier. */}
         </div>
 
         {/* Vibrant Palette Navigation Links */}
-        <nav className="hidden md:flex gap-6 text-[11px] font-bold uppercase tracking-[0.25em] text-white/40">
-          <span className="text-blue-400">Engine</span>
-          <span className="hover:text-white cursor-pointer transition-colors">Trends</span>
-          <span className="hover:text-white cursor-pointer transition-colors">Analytics</span>
-          <span className="hover:text-white cursor-pointer transition-colors">Archive</span>
+        {/* M-05 fix: previously these were non-interactive <span> elements with
+            cursor-pointer styling but no role/aria/handler — confusing screen
+            readers and misleading sighted users. Now aria-disabled with a
+            "coming soon" tooltip and no pointer cursor. */}
+        <nav className="hidden md:flex gap-6 text-[11px] font-bold uppercase tracking-[0.25em] text-white/40" aria-label="Main">
+          <span className="text-blue-400" aria-current="page">Engine</span>
+          <span aria-disabled="true" title="Coming soon" className="text-white/30 cursor-not-allowed">Trends</span>
+          <span aria-disabled="true" title="Coming soon" className="text-white/30 cursor-not-allowed">Analytics</span>
+          <span aria-disabled="true" title="Coming soon" className="text-white/30 cursor-not-allowed">Archive</span>
         </nav>
 
         {/* Header Action Buttons & Engagement Indicator */}
@@ -532,16 +640,14 @@ export default function Home() {
               className="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-white rounded-lg text-xs font-semibold border border-white/10 transition flex items-center gap-1"
             >
               <History className="w-3 h-3 text-blue-400" />
-              <span className="hidden sm:inline">Drafts ({savedPosts.length})</span>
+              <span className="hidden sm:inline">Drafts ({mounted ? savedPosts.length : 0})</span>
             </a>
           </div>
 
-          <div className="hidden lg:flex flex-col items-end border-l border-white/10 pl-4">
-            <span className="text-[9px] text-white/40 uppercase tracking-tighter">Engagement Power</span>
-            <span className="text-xs font-mono font-bold text-green-400">98.4% READY</span>
-          </div>
+          {/* L-06 fix: previously showed a hardcoded "98.4% READY" Engagement
+              Power indicator. Removed — the metric was fabricated. */}
 
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 border border-white/20 shadow-md shadow-blue-500/10"></div>
+          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-600 to-purple-600 border border-white/20 shadow-md shadow-blue-500/10" aria-hidden="true"></div>
         </div>
       </header>
 
@@ -1082,44 +1188,53 @@ export default function Home() {
                   </div>
 
                   {/* Viral Engagement Metrics Bar */}
-                  <div className="flex items-center justify-between border-t border-white/10 pt-3 text-[11px] font-mono text-white/30 px-2 select-none font-bold">
+                  {/* M-06 fix: previously used Unicode emoji (💬🔄❤️📊) which
+                      render inconsistently across OSes and have no semantic
+                      labels for screen readers. Replaced with Lucide icons
+                      (MessageCircle, Repeat2, Heart, BarChart3) with
+                      aria-labels. Note: these are mockup values the user can
+                      edit — they are not real engagement data. */}
+                  <div className="flex items-center justify-between border-t border-white/10 pt-3 text-[11px] font-mono text-white/30 px-2 select-none font-bold" role="group" aria-label="Mockup engagement metrics (editable)">
                     <div className="flex items-center gap-1 hover:text-blue-400 transition cursor-pointer">
-                      <span>💬</span>
+                      <MessageCircle className="w-3 h-3" aria-hidden="true" />
                       <span className="hover:text-blue-400">
                         <input
                           type="text"
                           value={retweetsCount}
                           onChange={(e) => setRetweetsCount(e.target.value)}
                           className="w-10 bg-transparent border-b border-transparent hover:border-white/10 focus:border-blue-500 focus:outline-none text-[11px] font-mono font-bold text-white/50 text-center"
-                          title="Edit comments count"
+                          title="Mockup comments count (editable)"
+                          aria-label="Mockup comments count"
                         />
                       </span>
                     </div>
                     <div className="flex items-center gap-1 hover:text-emerald-400 transition cursor-pointer">
-                      <span>🔄</span>
+                      <Repeat2 className="w-3 h-3" aria-hidden="true" />
                       <span>
                         <input
                           type="text"
                           value={likesCount}
                           onChange={(e) => setLikesCount(e.target.value)}
                           className="w-10 bg-transparent border-b border-transparent hover:border-white/10 focus:border-blue-500 focus:outline-none text-[11px] font-mono font-bold text-white/50 text-center"
-                          title="Edit retweets count"
+                          title="Mockup retweets count (editable)"
+                          aria-label="Mockup retweets count"
                         />
                       </span>
                     </div>
                     <div className="flex items-center gap-1 hover:text-red-400 transition cursor-pointer">
-                      <span>❤️</span>
+                      <Heart className="w-3 h-3" aria-hidden="true" />
                       <span className="text-white/50">14.3K</span>
                     </div>
                     <div className="flex items-center gap-1">
-                      <span>📊</span>
+                      <BarChart3 className="w-3 h-3" aria-hidden="true" />
                       <span>
                         <input
                           type="text"
                           value={viewsCount}
                           onChange={(e) => setViewsCount(e.target.value)}
                           className="w-12 bg-transparent border-b border-transparent hover:border-white/10 focus:border-blue-500 focus:outline-none text-[11px] font-mono text-white/30 text-center font-bold"
-                          title="Edit views count"
+                          title="Mockup views count (editable)"
+                          aria-label="Mockup views count"
                         />
                       </span>
                     </div>
@@ -1382,12 +1497,25 @@ export default function Home() {
             <div className="flex items-center justify-between border-b border-white/10 pb-3 mb-4">
               <h3 className="text-xs font-bold text-white/30 uppercase tracking-[0.2em] flex items-center gap-2">
                 <History className="w-4.5 h-4.5 text-blue-400" />
-                Campaign History ({savedPosts.length})
+                Campaign History ({mounted ? savedPosts.length : 0})
               </h3>
-              <span className="text-[10px] text-white/40 font-mono font-bold uppercase tracking-wider">Browser Storage</span>
+              <div className="flex items-center gap-3">
+                {/* H-03 fix: explicit "Clear All" button so users can wipe
+                    sensitive AI-generated content from their device. */}
+                {mounted && savedPosts.length > 0 && (
+                  <button
+                    onClick={clearAllDrafts}
+                    className="text-[10px] text-red-400 hover:text-red-300 font-mono font-bold uppercase tracking-wider transition cursor-pointer border border-red-500/20 hover:border-red-500/40 px-2 py-1 rounded"
+                    title="Delete all saved drafts"
+                  >
+                    Clear All
+                  </button>
+                )}
+                <span className="text-[10px] text-white/40 font-mono font-bold uppercase tracking-wider">Browser Storage · 30-day TTL</span>
+              </div>
             </div>
 
-            {savedPosts.length === 0 ? (
+            {!mounted || savedPosts.length === 0 ? (
               <div className="py-8 px-4 text-center rounded-xl border border-dashed border-white/10 bg-[#0A0A0B]/20">
                 <FileText className="w-8 h-8 text-white/20 mx-auto mb-2.5" />
                 <span className="text-xs text-white/50 font-bold block uppercase tracking-wider">No drafts saved yet.</span>
