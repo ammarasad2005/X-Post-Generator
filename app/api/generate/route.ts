@@ -83,6 +83,15 @@ interface OpenRouterChoice {
 
 interface OpenRouterResponse {
   choices?: OpenRouterChoice[];
+  error?: {
+    message?: string;
+    code?: number;
+    metadata?: {
+      raw?: string;
+      provider_name?: string;
+      retry_after_seconds?: number;
+    };
+  };
 }
 
 async function callOpenRouter(
@@ -128,6 +137,21 @@ async function callOpenRouter(
     }
 
     const result = (await response.json()) as OpenRouterResponse;
+
+    // OpenRouter sometimes returns HTTP 200 with an `error` field in the body
+    // when the upstream provider fails (e.g. "ResourceExhausted",
+    // "Worker local total request limit reached"). Treat this as an
+    // UPSTREAM_UNAVAILABLE so the fallback chain can try the next model.
+    if (result.error) {
+      logger.warn("openrouter_body_error", {
+        requestId,
+        model,
+        errorCode: result.error.code,
+        provider: result.error.metadata?.provider_name,
+      });
+      throw new UpstreamError("UPSTREAM_UNAVAILABLE");
+    }
+
     const rawText: string | undefined = result.choices?.[0]?.message?.content;
     if (!rawText) {
       throw new UpstreamError("UPSTREAM_INVALID_RESPONSE");
