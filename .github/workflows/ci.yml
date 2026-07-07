@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'fix/**', 'feat/**']
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same PR/branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint + Typecheck + Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+        env:
+          # Build does not require a real key, but the route module emits a
+          # fatal log if the key is missing. Set a placeholder to suppress the
+          # warning during CI build (the route handler still validates at
+          # runtime — see lib/errors.ts and route.ts getGeminiClient).
+          GEMINI_API_KEY: ci-placeholder-not-a-real-key
+
+      - name: Audit dependencies (non-blocking)
+        run: npm audit --audit-level=moderate
+        continue-on-error: true

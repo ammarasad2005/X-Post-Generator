@@ -14,23 +14,17 @@ import {
   GenerationResponseSchema,
   type ValidatedRequest,
 } from "@/lib/schemas";
+import {
+  isGeminiConfigured,
+  isOpenRouterConfigured,
+  APP_URL,
+} from "@/lib/config";
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 // C-03 fix: "gemini-3.5-flash" does not exist. Use gemini-2.5-flash.
 const PRIMARY_MODEL = "gemini-2.5-flash";
 
-// H-05 fix: refuse to operate with placeholder env values.
-const RAW_GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
 const RAW_OPENROUTER_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
-const PLACEHOLDER_VALUES = new Set(["", "MY_GEMINI_API_KEY", "MY_APP_URL"]);
-
-function isGeminiConfigured(): boolean {
-  return Boolean(RAW_GEMINI_KEY) && !PLACEHOLDER_VALUES.has(RAW_GEMINI_KEY);
-}
-function isOpenRouterConfigured(): boolean {
-  return Boolean(RAW_OPENROUTER_KEY) && !PLACEHOLDER_VALUES.has(RAW_OPENROUTER_KEY);
-}
 
 // H-07 fix: explicit per-call timeouts so a slow Gemini response cannot hang
 // a serverless request until the platform kills it.
@@ -50,7 +44,7 @@ function getGeminiClient(): GoogleGenAI {
     throw new UpstreamError("UPSTREAM_UNAVAILABLE");
   }
   return new GoogleGenAI({
-    apiKey: RAW_GEMINI_KEY,
+    apiKey: process.env.GEMINI_API_KEY!,
     httpOptions: { headers: { "User-Agent": "aistudio-build" } },
   });
 }
