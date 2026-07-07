@@ -1,0 +1,6 @@
+{
+  "name": "X Post Generator",
+  "description": "Create highly engaging, split-audience psychological bait posts for X (Twitter) designed to spark debates and build follower bases using stats, subtle ironies, and current sports events.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
