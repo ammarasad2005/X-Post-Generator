@@ -36,7 +36,7 @@ The app includes a 30-day TTL on locally-saved drafts and a "Clear All Drafts" b
    |---|---|---|
    | `OPENROUTER_API_KEY` | **Yes** | Get a free key at https://openrouter.ai/keys |
    | `APP_URL` | No | The URL where this app is hosted (used as OpenRouter `HTTP-Referer`). Defaults to `http://localhost:3000`. |
-   | `OPENROUTER_PRIMARY_MODEL` | No | Override the primary free model. Default: `google/gemini-2.5-flash:free`. Browse all free models at https://openrouter.ai/models?q=free |
+   | `OPENROUTER_PRIMARY_MODEL` | No | Override the primary free model. Default: `meta-llama/llama-3.3-70b-instruct:free`. Browse all free models at https://openrouter.ai/models?q=free |
    | `LOG_LEVEL` | No | One of `debug` \| `info` \| `warn` \| `error`. Default: `info`. |
 
    > ⚠️ **Important:** if `OPENROUTER_API_KEY` is empty or still set to a placeholder value, the API route will return a typed `UPSTREAM_UNAVAILABLE` (HTTP 503) error on every request. The app will not silently fail.
@@ -78,9 +78,10 @@ You will also need to copy the `.next/static` and `public/` directories alongsid
 - **Backend:** One API route (`app/api/generate/route.ts`) that:
   1. Validates input with `zod` (lib/schemas.ts)
   2. Rate-limits per IP (lib/rate-limit.ts, 10 req/hour, in-memory)
-  3. Calls OpenRouter's free-tier models — tries the primary model first (`OPENROUTER_PRIMARY_MODEL`, default `google/gemini-2.5-flash:free`), falls back through `meta-llama/llama-3.3-70b-instruct:free` → `mistralai/mistral-7b-instruct:free` → `qwen/qwen-2.5-72b-instruct:free` if the primary returns an error or unparseable JSON.
+  3. Calls OpenRouter's free-tier models — tries the primary model first (`OPENROUTER_PRIMARY_MODEL`, default `meta-llama/llama-3.3-70b-instruct:free`), falls back through `openai/gpt-oss-120b:free` → `qwen/qwen3-coder:free` → `nvidia/nemotron-3-ultra-550b-a55b:free` if the primary returns an error or unparseable JSON.
   4. Validates the LLM response against the zod schema before returning
 - **Provider choice:** OpenRouter exclusively. The original Gemini integration was removed because (a) Gemini's free tier has aggressive rate limits (10 RPM, 1500 RPD) that are easily exhausted, and (b) the Gemini API is intermittently unavailable for free-tier keys. OpenRouter's free model pool provides better availability and a wider model selection.
+- **Note on free model availability:** OpenRouter periodically moves models between free and paid tiers. As of 2026-07-07, `google/gemini-2.5-flash:free` is no longer available — the app defaults to `meta-llama/llama-3.3-70b-instruct:free` instead. Browse the current free models at https://openrouter.ai/models?q=free and override via `OPENROUTER_PRIMARY_MODEL` if needed.
 - **No live web grounding:** The previous Google Search grounded crawl step was removed because it was only available via the Gemini SDK. The model now uses its training knowledge. If you need live grounding, add a separate search API (e.g. Brave Search API) and re-introduce a 2-step pipeline.
 - **Error contract:** Every error response is one of `INVALID_INPUT` / `RATE_LIMITED` / `UPSTREAM_UNAVAILABLE` / `UPSTREAM_INVALID_RESPONSE` / `INTERNAL_ERROR`, accompanied by a `requestId` for support correlation. Internal exception details are never exposed to the client.
 - **Logging:** Structured JSON logger (lib/logger.ts) with `requestId` propagation, PII redaction (user-supplied `topic`/`customContext`/`postText` are always redacted), and log-level control via `LOG_LEVEL`.
@@ -89,8 +90,8 @@ You will also need to copy the `.next/static` and `public/` directories alongsid
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Every generate request returns `UPSTREAM_UNAVAILABLE` (HTTP 503) | `OPENROUTER_API_KEY` not set or still placeholder | Set a real key in `.env.local` |
-| Generate requests return `UPSTREAM_INVALID_RESPONSE` (HTTP 502) | All free models returned unparseable JSON | Try a different `OPENROUTER_PRIMARY_MODEL` (some free models struggle with strict JSON schema) |
+| Every generate request returns `UPSTREAM_UNAVAILABLE` (HTTP 503) | `OPENROUTER_API_KEY` not set or still placeholder, OR the configured `OPENROUTER_PRIMARY_MODEL` is no longer available on the free tier | Set a real key in `.env.local`. If the key is set, hit `/api/debug` to check whether the primary model is still available — override with `OPENROUTER_PRIMARY_MODEL` (browse current free models at https://openrouter.ai/models?q=free) |
+| Generate requests return `UPSTREAM_INVALID_RESPONSE` (HTTP 502) | All free models returned unparseable JSON | Try a different `OPENROUTER_PRIMARY_MODEL` (some free models struggle with strict JSON schema). Recommended: `meta-llama/llama-3.3-70b-instruct:free`, `openai/gpt-oss-120b:free`, or `qwen/qwen3-coder:free` |
 | Build fails with "Cannot find module 'autoprefixer'" | Dependencies not fully installed | Run `npm install` again |
 | `npm start` complains about `output: 'standalone'` | You're using an old start script | Use `node .next/standalone/server.js` (the default `start` script already does this) |
 | Rate-limited after a few requests | Per-IP limit is 10 req/hour | Wait an hour, or run your own instance |

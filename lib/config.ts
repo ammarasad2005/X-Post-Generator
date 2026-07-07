@@ -34,15 +34,23 @@ export const APP_URL = process.env.APP_URL ?? "http://localhost:3000";
 
 /**
  * Primary OpenRouter model. Override via env to A/B test other free models.
- * Default: google/gemini-2.5-flash:free — best quality / latency ratio of
- * the free tier. The model list below is the fallback chain tried in order
- * if the primary returns a non-200 or parsing fails.
+ *
+ * Default: meta-llama/llama-3.3-70b-instruct:free — well-rounded, handles
+ * strict JSON output reliably, 131K context. The fallback chain below is
+ * tried in order if the primary returns a non-200 or parsing fails.
+ *
+ * Note: google/gemini-2.5-flash:free was the previous default but is no
+ * longer available on the free tier (OpenRouter moved it to paid-only).
+ * If you have a paid OpenRouter account, set OPENROUTER_PRIMARY_MODEL=
+ * google/gemini-2.5-flash (no :free suffix) for higher quality.
+ *
+ * Browse all current free models at https://openrouter.ai/models?q=free
  */
 export const OPENROUTER_PRIMARY_MODEL =
-  process.env.OPENROUTER_PRIMARY_MODEL ?? "google/gemini-2.5-flash:free";
+  process.env.OPENROUTER_PRIMARY_MODEL ?? "meta-llama/llama-3.3-70b-instruct:free";
 
 export const OPENROUTER_FALLBACK_MODELS = [
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "mistralai/mistral-7b-instruct:free",
-  "qwen/qwen-2.5-72b-instruct:free",
+  "openai/gpt-oss-120b:free",
+  "qwen/qwen3-coder:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
 ];
