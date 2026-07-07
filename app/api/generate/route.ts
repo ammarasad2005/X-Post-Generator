@@ -36,7 +36,7 @@ function isOpenRouterConfigured(): boolean {
 // a serverless request until the platform kills it.
 const UPSTREAM_TIMEOUT_MS = 30_000;
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, _label: string): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   return promise.finally(() => clearTimeout(timer)) as Promise<T>;
